@@ -2,6 +2,9 @@ import { decodeHex, encodeHex } from './bytes';
 import { sha256 } from './crypto';
 import type { DohClient, DohMessage, WireRr } from './doh';
 import { normalizeDnsName } from './name';
+import { base32hexDecode } from './base32hex';
+import { nsec3Hash } from './nsec';
+import { compareBytes } from './bytes';
 import { decodeTypeBitmap, ownerWire, parseRrsigRdata, rrsetPreimage, sameWireName, verifySignature } from './wire';
 import { ROOT_TRUST_ANCHORS, type TrustAnchor } from './anchors';
 import { dsFromDnskey } from './ds';
@@ -232,6 +235,9 @@ export class DnssecResolver {
     keys: Uint8Array[],
     signer: string,
   ): string | null {
+    if (this.nsec3Denial(message, name, type, keys, signer)) {
+      return `authenticated denial: NSEC3 covers ${name} with no ${typeName(type)}`;
+    }
     const nsecs = message.authority.filter(rr => rr.type === TYPE_CODE.NSEC);
     for (const nsec of nsecs) {
       const sigs = message.authority.filter(
@@ -253,6 +259,47 @@ export class DnssecResolver {
       }
     }
     return null;
+  }
+
+  private nsec3Denial(
+    message: DohMessage,
+    name: string,
+    type: number,
+    keys: Uint8Array[],
+    signer: string,
+  ): boolean {
+    const records = message.authority.filter(rr => rr.type === TYPE_CODE.NSEC3);
+    for (const nsec of records) {
+      const sigs = message.authority.filter(
+        rr => rr.type === TYPE_CODE.RRSIG && sameWireName(rr.name, nsec.name),
+      );
+      const signed = sigs.some(sig =>
+        this.signatureOk(nsec.name, TYPE_CODE.NSEC3, [nsec], sig, keys, signer),
+      );
+      if (!signed) {
+        continue;
+      }
+      const parsed = parseNsec3Rdata(nsec.rdata);
+      if (!parsed) {
+        continue;
+      }
+      const qhash = nsec3Hash(name, parsed.iterations, parsed.salt);
+      const ownerLabel = nsec.name.replace(/\.$/, '').split('.')[0] ?? '';
+      let ownerHash: Uint8Array;
+      try {
+        ownerHash = base32hexDecode(ownerLabel);
+      } catch {
+        continue;
+      }
+      const types = decodeTypeBitmap(nsec.rdata, parsed.bitmapAt).types;
+      if (compareBytes(qhash, ownerHash) === 0 && !types.includes(type)) {
+        return true;
+      }
+      if (hashCovered(ownerHash, parsed.next, qhash)) {
+        return true;
+      }
+    }
+    return false;
   }
 }
 
@@ -377,6 +424,40 @@ function typeName(type: number): string {
     262: 'WALLET',
   };
   return names[type] ?? String(type);
+}
+
+function parseNsec3Rdata(
+  rdata: Uint8Array,
+): { iterations: number; salt: Uint8Array; next: Uint8Array; bitmapAt: number } | null {
+  if (rdata.length < 6) {
+    return null;
+  }
+  const iterations = (rdata[2] << 8) | rdata[3];
+  const saltLength = rdata[4];
+  if (5 + saltLength + 1 > rdata.length) {
+    return null;
+  }
+  const salt = rdata.subarray(5, 5 + saltLength);
+  const hashLength = rdata[5 + saltLength];
+  const nextAt = 6 + saltLength;
+  if (nextAt + hashLength > rdata.length) {
+    return null;
+  }
+  return {
+    iterations,
+    salt,
+    next: rdata.subarray(nextAt, nextAt + hashLength),
+    bitmapAt: nextAt + hashLength,
+  };
+}
+
+function hashCovered(owner: Uint8Array, next: Uint8Array, query: Uint8Array): boolean {
+  const afterOwner = compareBytes(query, owner) > 0;
+  const beforeNext = compareBytes(query, next) < 0;
+  if (compareBytes(owner, next) < 0) {
+    return afterOwner && beforeNext;
+  }
+  return afterOwner || beforeNext;
 }
 
 function decodeNameEnd(rdata: Uint8Array): { end: number } | null {
