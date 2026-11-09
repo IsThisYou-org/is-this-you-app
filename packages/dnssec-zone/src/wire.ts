@@ -8,6 +8,14 @@ import { txtWireFromPresentation } from './presentation';
 import { TYPE_CODE } from './types';
 import { Writer } from './writer';
 
+export interface WireRr {
+  name: string;
+  type: number;
+  ttl: number;
+  rdata: Uint8Array;
+  text?: string;
+}
+
 export interface WireName {
   wire: Uint8Array;
   text: string;
@@ -250,7 +258,7 @@ export function verifySignature(
 
 export function presentationToRdata(type: number, data: string): Uint8Array {
   const text = data.trim();
-  if (type === TYPE_CODE.TXT) {
+  if (type === TYPE_CODE.TXT || type === TYPE_CODE.WALLET) {
     return txtWireFromPresentation(text);
   }
   if (type === TYPE_CODE.NS) {

@@ -31,19 +31,23 @@ export interface DomainSettings {
   /** Empty string means empty salt. Otherwise even-length hex. */
   nsec3SaltHex: string;
   nsec3OptOut: boolean;
-  /** Best-effort parent DS lookup. Not a trust anchor. */
+  /** DoH JSON resolver. Chain validation uses the rdata field, not the AD bit. */
   dohUrl: string;
+  /** Used when the primary resolver rejects a name, notably the DNS root. */
+  dohFallbackUrl: string;
+  /** Display names. The master file is served from the IsThisYou.org repo. */
+  catalogUrl: string;
 }
 
 export function defaultSettings(): DomainSettings {
   return {
-    uploadBaseUrl: 'http://127.0.0.1:8787',
-    serviceNs: ['ns1.dnsauth.local.', 'ns2.dnsauth.local.'],
-    mname: 'ns1.dnsauth.local.',
+    uploadBaseUrl: 'http://127.0.0.1:8080',
+    serviceNs: ['ns1.example.net.', 'ns2.example.net.'],
+    mname: 'ns1.example.net.',
     rnameLocalPart: 'hostmaster',
     soaRefresh: 3600,
     soaRetry: 600,
-    soaExpire: 604800,
+    soaExpire: 864000,
     soaMinimum: 300,
     ttl: 300,
     rrsigValiditySeconds: 30 * 24 * 60 * 60,
@@ -59,7 +63,9 @@ export function defaultSettings(): DomainSettings {
     nsec3Iterations: 0,
     nsec3SaltHex: '',
     nsec3OptOut: false,
-    dohUrl: 'https://cloudflare-dns.com/dns-query',
+    dohUrl: 'https://api.web3dns.net/',
+    dohFallbackUrl: 'https://dns.google/resolve',
+    catalogUrl: 'https://isthisyou.org/categories.json',
   };
 }
 

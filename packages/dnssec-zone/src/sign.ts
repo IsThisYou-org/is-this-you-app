@@ -408,32 +408,53 @@ export async function signZone(input: ZoneMaterial): Promise<SignedZone> {
     dnskeyExpiry = Math.min(...existing.map(item => parseRrsig(item).expiration));
   }
 
-  const rrsets = grouped.map(rr => {
-    if (rr.type === 'DNSKEY') {
-      return toSet(rr, dnskeySigs);
-    }
-    const index = zskRrs.indexOf(rr);
-    const times = zskFields[index];
-    const presentation = presentRrsig(
-      {
-        typeCovered: rr.typeCode,
-        algorithm: 13,
-        labels: rr.owner.split('.').length,
-        originalTtl: rr.ttl,
-        expiration: times.expiration,
-        inception: times.inception,
-        keyTag: zskTag,
-        signer: apex,
-      },
-      zskSigs[index],
-    );
-    return toSet(rr, [presentation]);
-  });
+  const rrsets: ZoneDocument['rrsets'] = [];
+  const signatures = new Map<string, { ttl: number; rrdatas: string[] }>();
+  for (const rr of grouped) {
+    const name = presentName(rr.owner);
+    const sigs =
+      rr.type === 'DNSKEY'
+        ? dnskeySigs
+        : [
+            presentRrsig(
+              {
+                typeCovered: rr.typeCode,
+                algorithm: 13,
+                labels: rr.owner.split('.').length,
+                originalTtl: rr.ttl,
+                expiration: zskFields[zskRrs.indexOf(rr)].expiration,
+                inception: zskFields[zskRrs.indexOf(rr)].inception,
+                keyTag: zskTag,
+                signer: apex,
+              },
+              zskSigs[zskRrs.indexOf(rr)],
+            ),
+          ];
+    rrsets.push({
+      kind: 'dns#resourceRecordSet',
+      name,
+      type: rr.type,
+      ttl: rr.ttl,
+      rrdatas: rr.presentations,
+    });
+    const existing = signatures.get(name) ?? { ttl: rr.ttl, rrdatas: [] };
+    existing.rrdatas.push(...sigs);
+    signatures.set(name, existing);
+  }
+  for (const [name, sig] of signatures) {
+    rrsets.push({
+      kind: 'dns#resourceRecordSet',
+      name,
+      type: 'RRSIG',
+      ttl: sig.ttl,
+      rrdatas: sig.rrdatas,
+    });
+  }
 
   return {
     document: {
+      kind: 'dnsauth#signedZone',
       apex: presentName(apex),
-      soaSerial: input.serial,
       rrsets,
     },
     dnskeySignatureRrdatas: dnskeySigs,
@@ -448,22 +469,14 @@ function signatureWindow(
   input: ZoneMaterial,
 ): { inception: number; expiration: number } {
   const jitter = jitterSeconds(owner, type, input.jitterMaxSeconds);
+  // The hosting service rejects an RRSIG whose expiry minus inception
+  // exceeds 30 days. The backdate therefore comes out of that window.
   const inception = input.now - input.inceptionBackdateSeconds;
-  const expiration = input.now + input.validitySeconds - jitter;
+  const expiration = inception + input.validitySeconds - jitter;
   if (expiration <= inception) {
     throw new Error('RRSIG expiry is not after inception');
   }
   return { inception, expiration };
-}
-
-function toSet(rr: UnsignedRr, signatureRrdatas: string[]) {
-  return {
-    name: presentName(rr.owner),
-    type: rr.type,
-    ttl: rr.ttl,
-    rrdatas: rr.presentations,
-    signatureRrdatas,
-  };
 }
 
 function groupSameType(rrs: UnsignedRr[]): UnsignedRr[] {

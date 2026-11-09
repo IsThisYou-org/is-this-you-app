@@ -1,15 +1,18 @@
-/** Google Cloud DNS ResourceRecordSet shape, including DNSSEC signatures. */
+/**
+ * Upload document accepted by the hosting service.
+ * RRSIGs are their own rrsets. See is-this-you-dns-host `parse_upload`.
+ */
 export interface ResourceRecordSet {
+  kind: 'dns#resourceRecordSet';
   name: string;
   type: string;
   ttl: number;
   rrdatas: string[];
-  signatureRrdatas: string[];
 }
 
 export interface ZoneDocument {
+  kind: 'dnsauth#signedZone';
   apex: string;
-  soaSerial: number;
   rrsets: ResourceRecordSet[];
 }
 

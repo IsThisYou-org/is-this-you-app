@@ -1,101 +1,97 @@
-This is the Android phone app for **Is this you?**.
+# Is this you?
 
-URI category names and known wallet types are display-only. The master `categories.json` lives in the owner's site repo, [james-stevens/IsThisYou.org](https://github.com/james-stevens/IsThisYou.org), and is served at `https://isthisyou.org/categories.json`. This repo keeps only the bundled offline copy at `packages/dnssec-zone/data/categories.json`. The app fetches the URL at startup, at most once a day, and keeps a response only when its `version` is higher than the copy it already has. If the fetch fails or the JSON is invalid, it keeps using the cache or that bundled file. See `packages/dnssec-zone/README.md` for the schema.
+Android app for a user-owned DNSSEC identity zone. The phone holds the zone-signing keys, builds and signs the zone, and uploads the signed records to the hosting service. It can also look up any domain's URI and WALLET records and check the DNSSEC chain itself.
 
-This is a new [**React Native**](https://reactnative.dev) project, bootstrapped using [`@react-native-community/cli`](https://github.com/react-native-community/cli).
+iOS is not in this build.
 
-# Getting Started
+## Packages
 
-> **Note**: Make sure you have completed the [Set Up Your Environment](https://reactnative.dev/docs/set-up-your-environment) guide before proceeding.
+- `packages/dnssec-zone` — zone builder, algorithm-13 signer, NSEC3, and the DNSSEC chain checker. No React Native.
+- `packages/keystore` — `SoftwareKeystore` for tests, and the Kotlin Android Keystore module (`IsThisYouKeystore`) used by the app.
 
-## Step 1: Start Metro
+The app imports those packages. It does not keep a second copy of the signer.
 
-First, you will need to run **Metro**, the JavaScript build tool for React Native.
+## Display names
 
-To start the Metro dev server, run the following command from the root of your React Native project:
+URI categories and known wallet types are display-only and are not signed. The master `categories.json` lives in [james-stevens/IsThisYou.org](https://github.com/james-stevens/IsThisYou.org) and is served at https://isthisyou.org/categories.json. This repo only has the offline copy at `packages/dnssec-zone/data/categories.json`.
 
-```sh
-# Using npm
-npm start
+On startup the app fetches that URL at most once a day. It keeps a response only when `version` is higher than the copy it already has. A network error or invalid JSON leaves the cache, or the bundled file, in place. Schema:
 
-# OR using Yarn
-yarn start
+```json
+{
+  "version": 1,
+  "uri_categories": [{ "id": 1, "name": "social" }],
+  "wallet_types": [
+    { "id": "paypal", "name": "PayPal", "identifier_hint": "13-character payer or merchant ID" }
+  ]
+}
 ```
 
-## Step 2: Build and run your app
+Category ids start at 1. Priority 0 and weight 0 together are the single default URI, not a category. Unknown category numbers are shown as "other". Unknown wallet types are shown with their raw type string.
 
-With Metro running, open a new terminal window/pane from the root of your React Native project, and use one of the following commands to build and run your Android or iOS app:
+## Records
 
-### Android
+- URI records are all at the zone apex. Priority is the category. Weight is the sort order, lower first. At most one URI is the default (`0 0`).
+- WALLET (type 262) is character-strings at the apex: type, identifier, and optionally a description and a numeric sort order. A two-string record is valid. A missing or non-numeric sort order sorts last.
+- PayPal's identifier is the 13-character account id unless the user explicitly chooses an email. The editor warns that a published email is public permanently.
 
-```sh
-# Using npm
-npm run android
+## Keys
 
-# OR using Yarn
-yarn android
+KSK and ZSK are P-256 (DNSSEC algorithm 13). Each domain has its own pair. The KSK is created with user authentication required; signing the DNSKEY set shows `BiometricPrompt`. The ZSK is not gated per signature. The module asks for StrongBox and, if the device has none, generates the key in the TEE and records which one was used. Android 10 (API 29) is the minimum, for the Moto G8 Plus used in development. That phone has no StrongBox, so the TEE path is the one that must work.
+
+`attest` returns the Android Key Attestation certificate chain. Publishing a zone does not call it. There is no relying-party enrolment in this MVP, so the chain is not sent anywhere yet.
+
+This environment cannot open BiometricPrompt or StrongBox. Unit tests use `SoftwareKeystore`, which counts biometric prompts. The debug APK contains the Kotlin module; the prompt runs on a device.
+
+## DNSSEC lookups
+
+Lookups use DNS-over-HTTPS JSON, default `https://api.web3dns.net/?name=&type=&do=1`. Validation uses the `rdata` field (wire RDATA) and ignores the AD bit. `api.web3dns.net` rejects the root name `.`, so the root DNSKEY query falls back to `https://dns.google/resolve` and is still checked against the bundled IANA trust anchors. That fallback URL is a setting.
+
+Wallet check and domain info work for any domain, not only the ones on the phone. A match is yes only when the chain validates. A validated WALLET set that does not contain the type and identifier is no. Anything else is "can't verify".
+
+## Hosting upload
+
+`POST /v1/zones/{apex}` with `Content-Type: application/json`:
+
+```json
+{ "kind": "dnsauth#signedZone", "apex": "example.com.", "rrsets": [ { "kind": "dns#resourceRecordSet", "name": "example.com.", "type": "SOA", "ttl": 300, "rrdatas": ["..."] } ] }
 ```
 
-### iOS
+RRSIGs are their own rrsets. The shape matches [is-this-you-dns-host](https://github.com/james-stevens/is-this-you-dns-host/pull/1). `serial_stale`, `serial_in_future`, and `serial_not_increased` cause one ZSK re-sign and a retry, without asking for the KSK again. SOA serial is Unix time. RRSIG lifetime is at most 30 days measured from the backdated inception, because the host rejects a longer lifetime.
 
-For iOS, remember to install CocoaPods dependencies (this only needs to be run on first clone or after updating native deps).
+## Build and sideload
 
-The first time you create a new project, run the Ruby bundler to install CocoaPods itself:
-
-```sh
-bundle install
-```
-
-Then, and every time you update your native dependencies, run:
+Requirements: Node 22, JDK 17 or 21, Android SDK (compileSdk 37). `minSdk` is 29.
 
 ```sh
-bundle exec pod install
+npm install
+export ANDROID_HOME="$HOME/android-sdk"
+echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+npm test
+npm run android:assemble
 ```
 
-For more information, please visit [CocoaPods Getting Started guide](https://guides.cocoapods.org/using/getting-started.html).
+The debug APK is `android/app/build/outputs/apk/debug/app-debug.apk`.
 
 ```sh
-# Using npm
-npm run ios
-
-# OR using Yarn
-yarn ios
+adb reverse tcp:8080 tcp:8080
+adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-If everything is set up correctly, you should see your new app running in the Android Emulator, iOS Simulator, or your connected device.
+`adb reverse` makes the phone's `127.0.0.1:8080` the computer running the host. The debug build allows cleartext HTTP. A phone on the same LAN can use the computer's address instead of reverse.
 
-This is one way to run your app — you can also build it directly from Android Studio or Xcode.
+Local stand-in for the host:
 
-## Step 3: Modify your app
+```sh
+npm run mock-host
+```
 
-Now that you have successfully run the app, let's make changes!
+That listens on port 8080 and speaks the same upload path and serial error codes. Set `MOCK_NOW` to force a stale-serial response. The default nameservers are `ns1.example.net.` and `ns2.example.net.`. Point the domain's hosting settings at the real service NS list before a real upload.
 
-Open `App.tsx` in your text editor of choice and make some changes. When you save, your app will automatically update and reflect these changes — this is powered by [Fast Refresh](https://reactnative.dev/docs/fast-refresh).
+On the phone: add a domain, generate keys, publish the shown DS and every hosting NS at the registrar, then upload. The app does not call the zone live until the host accepts it, and it says resolvers may still SERVFAIL until secondaries AXFR. Weekly re-sign runs when the app is opened, for every domain that is due. There is no background scheduler in this build.
 
-When you want to forcefully reload, for example to reset the state of your app, you can perform a full reload:
+## Not in this MVP
 
-- **Android**: Press the <kbd>R</kbd> key twice or select **"Reload"** from the **Dev Menu**, accessed via <kbd>Ctrl</kbd> + <kbd>M</kbd> (Windows/Linux) or <kbd>Cmd ⌘</kbd> + <kbd>M</kbd> (macOS).
-- **iOS**: Press <kbd>R</kbd> in iOS Simulator.
+Per-site enrolment, detached JWS, proof bundles, agents, and the signed request log. Authorisation requests, when they are added, will arrive by QR code or a deep link while the user is already on the phone. No push notifications.
 
-## Congratulations! :tada:
-
-You've successfully run and modified your React Native App. :partying_face:
-
-### Now what?
-
-- If you want to add this new React Native code to an existing application, check out the [Integration guide](https://reactnative.dev/docs/integration-with-existing-apps).
-- If you're curious to learn more about React Native, check out the [docs](https://reactnative.dev/docs/getting-started).
-
-# Troubleshooting
-
-If you're having issues getting the above steps to work, see the [Troubleshooting](https://reactnative.dev/docs/troubleshooting) page.
-
-# Learn More
-
-To learn more about React Native, take a look at the following resources:
-
-- [React Native Website](https://reactnative.dev) - learn more about React Native.
-- [Getting Started](https://reactnative.dev/docs/environment-setup) - an **overview** of React Native and how setup your environment.
-- [Learn the Basics](https://reactnative.dev/docs/getting-started) - a **guided tour** of the React Native **basics**.
-- [Blog](https://reactnative.dev/blog) - read the latest official React Native **Blog** posts.
-- [`@facebook/react-native`](https://github.com/facebook/react-native) - the Open Source; GitHub **repository** for React Native.
+On-device biometrics and StrongBox are implemented in the Kotlin module and are not executed in CI.
