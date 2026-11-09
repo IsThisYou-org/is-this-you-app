@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "uri_categories": [
+    { "id": 1, "name": "social" },
+    { "id": 2, "name": "gaming" }
+  ],
+  "wallet_types": [
+    {
+      "id": "btc",
+      "name": "Bitcoin",
+      "identifier_hint": "Bitcoin address"
+    },
+    {
+      "id": "eth",
+      "name": "Ethereum",
+      "identifier_hint": "Ethereum address"
+    },
+    {
+      "id": "sol",
+      "name": "Solana",
+      "identifier_hint": "Solana address"
+    },
+    {
+      "id": "paypal",
+      "name": "PayPal",
+      "identifier_hint": "13-character payer or merchant ID"
+    }
+  ]
+}
